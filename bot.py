@@ -15,8 +15,8 @@ from datetime import datetime
 
 # ========== НАСТРОЙКИ (замените своими) ==========
 API_TOKEN = "8556100624:AAEjTGUaj3P5xS0fTtlYRj5DeDw9j5pZdU8"   # ваш токен
-ADMIN_ID = 8556100624                                         # ваш Telegram ID
-ALLOWED_USERS = [8556100624]                                   # список разрешённых ID
+ADMIN_ID = 491501244                                         # ваш Telegram ID
+ALLOWED_USERS = [491501244]                                   # список разрешённых ID
 # =================================================
 
 logging.basicConfig(level=logging.INFO)
