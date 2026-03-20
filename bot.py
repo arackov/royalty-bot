@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-API_TOKEN = os.getenv("TG_BOT_API_KEY")
+API_TOKEN = "8556100624:AAEjTGUaj3P5xS0fTtlYRj5DeDw9j5pZdU8"
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 ALLOWED_USERS = [int(x.strip()) for x in os.getenv("ALLOWED_USERS", "").split(",") if x.strip()]
 
