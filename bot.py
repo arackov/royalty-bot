@@ -12,10 +12,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from dotenv import load_dotenv
 import openpyxl
-from openpyxl.styles import Font, Alignment, PatternFill
 from datetime import datetime
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -25,7 +23,6 @@ API_TOKEN = os.getenv("TG_BOT_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 ALLOWED_USERS = [int(x.strip()) for x in os.getenv("ALLOWED_USERS", "").split(",") if x.strip()]
 
-# Проверка наличия токена
 if not API_TOKEN:
     logger.error("TG_BOT_API_KEY not set!")
     exit(1)
@@ -33,7 +30,6 @@ if not API_TOKEN:
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Flask для health check
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
@@ -41,7 +37,6 @@ flask_app = Flask(__name__)
 def health():
     return "Bot is running", 200
 
-# Состояния для FSM
 class ReportState(StatesGroup):
     waiting_contracts = State()
     waiting_quarters = State()
@@ -51,7 +46,6 @@ class ReportState(StatesGroup):
     waiting_author_percent = State()
     waiting_related_percent = State()
 
-# Получение данных из БД
 def get_db_connection():
     try:
         conn = sqlite3.connect('royalties.db')
@@ -99,8 +93,9 @@ def build_multi_select_keyboard(items, selected_items, prefix, page=0, items_per
     for item in items[start_idx:end_idx]:
         is_selected = item in selected_items
         emoji = "✅ " if is_selected else "⬜ "
-        callback_data = f"{prefix}_toggle_{item.replace(' ', '_')}"
-        keyboard.append([InlineKeyboardButton(text=f"{emoji}{item}", callback_data=callback_data)])
+        item_str = str(item)
+        callback_data = f"{prefix}_toggle_{item_str.replace(' ', '_')}"
+        keyboard.append([InlineKeyboardButton(text=f"{emoji}{item_str}", callback_data=callback_data)])
     
     nav_buttons = []
     if page > 0:
@@ -162,13 +157,11 @@ async def cmd_report(message: Message, state: FSMContext):
     keyboard = build_multi_select_keyboard(contracts, [], "contract")
     await message.answer("📋 *Выберите договоры:*\n(можно выбрать несколько)", parse_mode="Markdown", reply_markup=keyboard)
 
-# Обработка callback'ов для выбора
 @dp.callback_query()
 async def handle_callback(callback: CallbackQuery, state: FSMContext):
     data = callback.data
     user_data = await state.get_data()
     
-    # Обработка выбора договоров
     if data.startswith("contract_"):
         if data == "contract_done":
             selected = user_data.get("selected_contracts", [])
@@ -204,7 +197,6 @@ async def handle_callback(callback: CallbackQuery, state: FSMContext):
             keyboard = build_multi_select_keyboard(contracts, selected, "contract", page)
             await callback.message.edit_reply_markup(reply_markup=keyboard)
     
-    # Обработка выбора кварталов
     elif data.startswith("quarter_"):
         if data == "quarter_done":
             selected = user_data.get("selected_quarters", [])
@@ -240,7 +232,6 @@ async def handle_callback(callback: CallbackQuery, state: FSMContext):
             keyboard = build_multi_select_keyboard(quarters, selected, "quarter", page)
             await callback.message.edit_reply_markup(reply_markup=keyboard)
     
-    # Обработка выбора годов
     elif data.startswith("year_"):
         if data == "year_done":
             selected = user_data.get("selected_years", [])
@@ -276,7 +267,6 @@ async def handle_callback(callback: CallbackQuery, state: FSMContext):
             keyboard = build_multi_select_keyboard(years, selected, "year", page)
             await callback.message.edit_reply_markup(reply_markup=keyboard)
     
-    # Обработка выбора типов прав
     elif data.startswith("type_"):
         if data == "type_done":
             selected = user_data.get("selected_types", [])
@@ -312,7 +302,6 @@ async def handle_callback(callback: CallbackQuery, state: FSMContext):
             keyboard = build_multi_select_keyboard(types, selected, "type", page)
             await callback.message.edit_reply_markup(reply_markup=keyboard)
     
-    # Обработка выбора песен
     elif data.startswith("song_"):
         if data == "song_done":
             await state.set_state(None)
@@ -343,7 +332,6 @@ async def handle_callback(callback: CallbackQuery, state: FSMContext):
     
     await callback.answer()
 
-# Генерация отчета
 async def generate_report(message, user_data):
     await message.answer("📊 Формирую отчет, пожалуйста подождите...")
     
@@ -414,7 +402,6 @@ async def generate_report(message, user_data):
     related_payout = related_net * (related_percent / 100) if related_percent > 0 else 0
     total_payout = author_payout + related_payout
     
-    # Текстовый отчет
     report_text = "📊 *ОТЧЕТ ПО РОЯЛТИ*\n\n"
     report_text += f"📋 *Договоры:* {', '.join(selected_contracts)}\n"
     report_text += f"📅 *Кварталы:* {', '.join(selected_quarters)}\n"
@@ -450,7 +437,6 @@ async def generate_report(message, user_data):
     report_text += f"📌 *ИТОГО К ВЫПЛАТЕ:* {total_payout:,.2f} ₽\n\n"
     report_text += "📎 *Детализация в прикрепленном Excel-файле*"
     
-    # Генерация Excel
     excel_filename = f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     wb = openpyxl.Workbook()
     
@@ -511,7 +497,6 @@ async def generate_report(message, user_data):
     
     os.remove(excel_filename)
 
-# Обработка текстовых сообщений для ввода процентов
 @dp.message(ReportState.waiting_author_percent)
 async def process_author_percent(message: Message, state: FSMContext):
     try:
@@ -549,7 +534,6 @@ async def process_related_percent(message: Message, state: FSMContext):
     except ValueError:
         await message.answer("❌ Пожалуйста, введите число (например: 30 или 25.5)")
 
-# Запуск бота и Flask
 def run_flask():
     port = int(os.environ.get('PORT', 10000))
     flask_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
