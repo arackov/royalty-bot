@@ -246,18 +246,23 @@ async def handle_callback(callback: CallbackQuery, state: FSMContext):
             await callback.message.edit_text("⚖️ *Выберите типы прав:*", parse_mode="Markdown", reply_markup=keyboard)
         
         elif data.startswith("year_toggle_"):
-            item = data.replace("year_toggle_", "").replace("_", " ")
-            selected = user_data.get("selected_years", [])
-            if item in selected:
-                selected.remove(item)
-            else:
-                selected.append(item)
-            await state.update_data(selected_years=selected)
-            
-            years = get_unique_values("year")
-            page = user_data.get("year_page", 0)
-            keyboard = build_multi_select_keyboard(years, selected, "year", page)
-            await callback.message.edit_reply_markup(reply_markup=keyboard)
+    item = data.replace("year_toggle_", "").replace("_", " ")
+    selected = user_data.get("selected_years", [])
+    if item in selected:
+        selected.remove(item)
+    else:
+        selected.append(item)
+    await state.update_data(selected_years=selected)
+    
+    years = get_unique_values("year")
+    page = user_data.get("year_page", 0)
+    keyboard = build_multi_select_keyboard(years, selected, "year", page)
+    
+    # Проверяем, изменилась ли клавиатура
+    if callback.message.reply_markup != keyboard:
+        await callback.message.edit_reply_markup(reply_markup=keyboard)
+    else:
+        await callback.answer()
         
         elif data.startswith("year_page_"):
             page = int(data.split("_")[-1])
