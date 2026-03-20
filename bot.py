@@ -2,6 +2,7 @@ import os
 import sqlite3
 import asyncio
 import threading
+import logging
 from flask import Flask
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, FSInputFile
@@ -14,11 +15,20 @@ import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill
 from datetime import datetime
 
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 load_dotenv()
 
 API_TOKEN = os.getenv("TG_BOT_API_KEY")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 ALLOWED_USERS = [int(x.strip()) for x in os.getenv("ALLOWED_USERS", "").split(",") if x.strip()]
+
+# Проверка наличия токена
+if not API_TOKEN:
+    logger.error("TG_BOT_API_KEY not set!")
+    exit(1)
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -41,31 +51,46 @@ class ReportState(StatesGroup):
     waiting_author_percent = State()
     waiting_related_percent = State()
 
-# Вспомогательная функция для получения данных из БД
+# Получение данных из БД
 def get_db_connection():
-    conn = sqlite3.connect('royalties.db')
-    conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        conn = sqlite3.connect('royalties.db')
+        conn.row_factory = sqlite3.Row
+        return conn
+    except Exception as e:
+        logger.error(f"Database connection error: {e}")
+        return None
 
-# Получение уникальных значений для фильтров
 def get_unique_values(column):
     conn = get_db_connection()
+    if not conn:
+        return []
     cursor = conn.cursor()
-    cursor.execute(f"SELECT DISTINCT {column} FROM royalties WHERE {column} IS NOT NULL AND {column} != '' ORDER BY {column}")
-    values = [row[0] for row in cursor.fetchall()]
-    conn.close()
+    try:
+        cursor.execute(f"SELECT DISTINCT {column} FROM royalties WHERE {column} IS NOT NULL AND {column} != '' ORDER BY {column}")
+        values = [row[0] for row in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Error getting unique values for {column}: {e}")
+        values = []
+    finally:
+        conn.close()
     return values
 
-# Получение списка песен
 def get_songs():
     conn = get_db_connection()
+    if not conn:
+        return []
     cursor = conn.cursor()
-    cursor.execute("SELECT DISTINCT display_name FROM royalties ORDER BY display_name")
-    songs = [row[0] for row in cursor.fetchall()]
-    conn.close()
+    try:
+        cursor.execute("SELECT DISTINCT display_name FROM royalties ORDER BY display_name")
+        songs = [row[0] for row in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Error getting songs: {e}")
+        songs = []
+    finally:
+        conn.close()
     return songs
 
-# Клавиатура для множественного выбора
 def build_multi_select_keyboard(items, selected_items, prefix, page=0, items_per_page=10):
     keyboard = []
     start_idx = page * items_per_page
@@ -77,7 +102,6 @@ def build_multi_select_keyboard(items, selected_items, prefix, page=0, items_per
         callback_data = f"{prefix}_toggle_{item.replace(' ', '_')}"
         keyboard.append([InlineKeyboardButton(text=f"{emoji}{item}", callback_data=callback_data)])
     
-    # Навигация
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"{prefix}_page_{page-1}"))
@@ -86,14 +110,13 @@ def build_multi_select_keyboard(items, selected_items, prefix, page=0, items_per
     if nav_buttons:
         keyboard.append(nav_buttons)
     
-    # Кнопка "Готово"
     keyboard.append([InlineKeyboardButton(text="✅ Готово", callback_data=f"{prefix}_done")])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-# Команда /start
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
+    logger.info(f"User {message.from_user.id} started bot")
     if message.from_user.id not in ALLOWED_USERS and message.from_user.id != ADMIN_ID:
         await message.answer("⛔ У вас нет доступа к этому боту.")
         return
@@ -103,12 +126,10 @@ async def cmd_start(message: Message):
         "Я помогу сформировать отчет по роялти.\n\n"
         "📌 *Доступные команды:*\n"
         "/report - сформировать отчет с выбором фильтров\n"
-        "/help - справка\n\n"
-        "Выберите действие:",
+        "/help - справка",
         parse_mode="Markdown"
     )
 
-# Команда /help
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
     await message.answer(
@@ -124,7 +145,6 @@ async def cmd_help(message: Message):
         parse_mode="Markdown"
     )
 
-# Команда /report
 @dp.message(Command("report"))
 async def cmd_report(message: Message, state: FSMContext):
     if message.from_user.id not in ALLOWED_USERS and message.from_user.id != ADMIN_ID:
@@ -156,7 +176,6 @@ async def handle_callback(callback: CallbackQuery, state: FSMContext):
                 await callback.answer("Выберите хотя бы один договор!", show_alert=True)
                 return
             
-            # Переходим к выбору кварталов
             quarters = ["I", "II", "III", "IV"]
             await state.update_data(selected_quarters=[])
             await state.set_state(ReportState.waiting_quarters)
@@ -185,7 +204,7 @@ async def handle_callback(callback: CallbackQuery, state: FSMContext):
             keyboard = build_multi_select_keyboard(contracts, selected, "contract", page)
             await callback.message.edit_reply_markup(reply_markup=keyboard)
     
-    # Обработка выбора кварталов (аналогично)
+    # Обработка выбора кварталов
     elif data.startswith("quarter_"):
         if data == "quarter_done":
             selected = user_data.get("selected_quarters", [])
@@ -193,7 +212,6 @@ async def handle_callback(callback: CallbackQuery, state: FSMContext):
                 await callback.answer("Выберите хотя бы один квартал!", show_alert=True)
                 return
             
-            # Переходим к выбору годов
             years = get_unique_values("year")
             await state.update_data(selected_years=[])
             await state.set_state(ReportState.waiting_years)
@@ -230,7 +248,6 @@ async def handle_callback(callback: CallbackQuery, state: FSMContext):
                 await callback.answer("Выберите хотя бы один год!", show_alert=True)
                 return
             
-            # Переходим к выбору типов прав
             types = ["Авторские", "Смежные"]
             await state.update_data(selected_types=[])
             await state.set_state(ReportState.waiting_types)
@@ -267,7 +284,6 @@ async def handle_callback(callback: CallbackQuery, state: FSMContext):
                 await callback.answer("Выберите хотя бы один тип!", show_alert=True)
                 return
             
-            # Если выбраны оба типа, запрашиваем проценты
             if "Авторские" in selected and "Смежные" in selected:
                 await state.set_state(ReportState.waiting_author_percent)
                 await callback.message.edit_text("💰 *Укажите процент блогера для АВТОРСКИХ прав:*\n(например: 50)", parse_mode="Markdown")
@@ -277,7 +293,7 @@ async def handle_callback(callback: CallbackQuery, state: FSMContext):
                 songs = get_songs()
                 keyboard = build_multi_select_keyboard(songs, [], "song")
                 await callback.message.edit_text("🎵 *Выберите песни:*\n(можно выбрать несколько, или нажмите Готово чтобы взять все)", parse_mode="Markdown", reply_markup=keyboard)
-            else:  # только смежные
+            else:
                 await state.update_data(author_percent=0, related_percent=0)
                 await state.set_state(ReportState.waiting_related_percent)
                 await callback.message.edit_text("💰 *Укажите процент блогера для СМЕЖНЫХ прав:*\n(например: 30)", parse_mode="Markdown")
@@ -300,8 +316,6 @@ async def handle_callback(callback: CallbackQuery, state: FSMContext):
     elif data.startswith("song_"):
         if data == "song_done":
             await state.set_state(None)
-            
-            # Получаем все данные для отчета
             user_data = await state.get_data()
             await generate_report(callback.message, user_data)
         
@@ -341,8 +355,11 @@ async def generate_report(message, user_data):
     author_percent = user_data.get("author_percent", 0)
     related_percent = user_data.get("related_percent", 0)
     
-    # Строим SQL-запрос
     conn = get_db_connection()
+    if not conn:
+        await message.answer("❌ Ошибка подключения к базе данных.")
+        return
+    
     cursor = conn.cursor()
     
     query = "SELECT * FROM royalties WHERE 1=1"
@@ -364,16 +381,22 @@ async def generate_report(message, user_data):
         query += f" AND display_name IN ({','.join(['?']*len(selected_songs))})"
         params.extend(selected_songs)
     
-    cursor.execute(query, params)
-    rows = cursor.fetchall()
-    conn.close()
+    try:
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+    except Exception as e:
+        logger.error(f"Query error: {e}")
+        await message.answer(f"❌ Ошибка запроса: {e}")
+        conn.close()
+        return
+    finally:
+        conn.close()
     
     if not rows:
         await message.answer("❌ Нет данных по выбранным фильтрам.")
         return
     
-    # Расчет итогов
-    TAX_RATE = 0.06  # 6%
+    TAX_RATE = 0.06
     
     author_total_revenue = 0
     related_total_revenue = 0
@@ -384,7 +407,6 @@ async def generate_report(message, user_data):
         else:
             related_total_revenue += row["sum"]
     
-    # Расчет чистой выручки и выплат
     author_net = author_total_revenue * (1 - TAX_RATE)
     related_net = related_total_revenue * (1 - TAX_RATE)
     
@@ -392,39 +414,38 @@ async def generate_report(message, user_data):
     related_payout = related_net * (related_percent / 100) if related_percent > 0 else 0
     total_payout = author_payout + related_payout
     
-    # Формируем текстовый отчет
+    # Текстовый отчет
     report_text = "📊 *ОТЧЕТ ПО РОЯЛТИ*\n\n"
     report_text += f"📋 *Договоры:* {', '.join(selected_contracts)}\n"
     report_text += f"📅 *Кварталы:* {', '.join(selected_quarters)}\n"
     report_text += f"📆 *Годы:* {', '.join(map(str, selected_years))}\n"
     report_text += f"⚖️ *Типы прав:* {', '.join(selected_types)}\n\n"
     
-    if selected_types:
-        if "Авторские" in selected_types:
-            report_text += "💰 *АВТОРСКИЕ ПРАВА*"
-            if author_percent > 0:
-                report_text += f" (процент блогера: {author_percent}%)\n"
-            else:
-                report_text += "\n"
-            report_text += f"  Общий доход: {author_total_revenue:,.2f} ₽\n"
-            report_text += f"  Налог (6%): {author_total_revenue * TAX_RATE:,.2f} ₽\n"
-            report_text += f"  Чистая выручка: {author_net:,.2f} ₽\n"
-            if author_percent > 0:
-                report_text += f"  К выплате блогеру: {author_payout:,.2f} ₽\n"
+    if "Авторские" in selected_types:
+        report_text += "💰 *АВТОРСКИЕ ПРАВА*"
+        if author_percent > 0:
+            report_text += f" (процент блогера: {author_percent}%)\n"
+        else:
             report_text += "\n"
-        
-        if "Смежные" in selected_types:
-            report_text += "🎵 *СМЕЖНЫЕ ПРАВА*"
-            if related_percent > 0:
-                report_text += f" (процент блогера: {related_percent}%)\n"
-            else:
-                report_text += "\n"
-            report_text += f"  Общий доход: {related_total_revenue:,.2f} ₽\n"
-            report_text += f"  Налог (6%): {related_total_revenue * TAX_RATE:,.2f} ₽\n"
-            report_text += f"  Чистая выручка: {related_net:,.2f} ₽\n"
-            if related_percent > 0:
-                report_text += f"  К выплате блогеру: {related_payout:,.2f} ₽\n"
+        report_text += f"  Общий доход: {author_total_revenue:,.2f} ₽\n"
+        report_text += f"  Налог (6%): {author_total_revenue * TAX_RATE:,.2f} ₽\n"
+        report_text += f"  Чистая выручка: {author_net:,.2f} ₽\n"
+        if author_percent > 0:
+            report_text += f"  К выплате блогеру: {author_payout:,.2f} ₽\n"
+        report_text += "\n"
+    
+    if "Смежные" in selected_types:
+        report_text += "🎵 *СМЕЖНЫЕ ПРАВА*"
+        if related_percent > 0:
+            report_text += f" (процент блогера: {related_percent}%)\n"
+        else:
             report_text += "\n"
+        report_text += f"  Общий доход: {related_total_revenue:,.2f} ₽\n"
+        report_text += f"  Налог (6%): {related_total_revenue * TAX_RATE:,.2f} ₽\n"
+        report_text += f"  Чистая выручка: {related_net:,.2f} ₽\n"
+        if related_percent > 0:
+            report_text += f"  К выплате блогеру: {related_payout:,.2f} ₽\n"
+        report_text += "\n"
     
     report_text += f"📌 *ИТОГО К ВЫПЛАТЕ:* {total_payout:,.2f} ₽\n\n"
     report_text += "📎 *Детализация в прикрепленном Excel-файле*"
@@ -433,7 +454,6 @@ async def generate_report(message, user_data):
     excel_filename = f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     wb = openpyxl.Workbook()
     
-    # Лист с детализацией
     ws = wb.active
     ws.title = "Детализация"
     
@@ -456,7 +476,6 @@ async def generate_report(message, user_data):
             row["display_name"], additional, row["sum"], tax, net, percent, payout
         ])
     
-    # Лист со сводкой
     ws_summary = wb.create_sheet("Сводка")
     ws_summary.append(["Показатель", "Значение"])
     ws_summary.append(["Договоры", ", ".join(selected_contracts)])
@@ -487,14 +506,12 @@ async def generate_report(message, user_data):
     
     wb.save(excel_filename)
     
-    # Отправляем текстовый отчет и файл
     await message.answer(report_text, parse_mode="Markdown")
     await message.answer_document(FSInputFile(excel_filename), caption="📎 Детализация отчета")
     
-    # Удаляем временный файл
     os.remove(excel_filename)
 
-# Обработка текстовых сообщений (для ввода процентов)
+# Обработка текстовых сообщений для ввода процентов
 @dp.message(ReportState.waiting_author_percent)
 async def process_author_percent(message: Message, state: FSMContext):
     try:
@@ -538,13 +555,25 @@ def run_flask():
     flask_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 async def main():
-    await dp.start_polling(bot)
+    logger.info("Starting bot...")
+    try:
+        await dp.start_polling(bot, skip_updates=True)
+    except Exception as e:
+        logger.error(f"Error in polling: {e}")
+        raise
 
 if __name__ == "__main__":
-    # Запускаем Flask в отдельном потоке
+    logger.info("Initializing...")
+    
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
+    logger.info("Flask server started")
     
-    # Запускаем бота
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        exit(1)
